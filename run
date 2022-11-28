@@ -18,7 +18,7 @@ def main():
 
     #start relay server for MPC
     if Config().relay_server is not None:
-        print("running relay server")
+        print("relay server is configured")
         relay_server = server_registry.get_relay_server()
         relay_server.run()
         print("relay server is running")
