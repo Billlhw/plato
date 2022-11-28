@@ -9,7 +9,7 @@ import logging
 
 from plato.config import Config
 
-from plato.servers import fedavg, fedavg_cs, mistnet, fedavg_gan
+from plato.servers import fedavg, fedavg_cs, mistnet, fedavg_gan, relay
 
 if hasattr(Config().server, "type") and Config().server.type == "fedavg_he":
     # FedAvg server with homomorphic encryption supports PyTorch only
@@ -40,3 +40,7 @@ def get(model=None, algorithm=None, trainer=None):
         )
     else:
         raise ValueError(f"No such server: {server_type}")
+
+def get_relay_server():
+    """Get an instance of the relay server."""
+    return relay.Server()

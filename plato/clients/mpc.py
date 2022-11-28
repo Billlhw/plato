@@ -1,5 +1,5 @@
 """
-The base class for all federated learning clients on edge devices or edge servers.
+The base class for mpc clients to communicate with other clients via the relay server
 """
 
 import asyncio
@@ -17,57 +17,56 @@ from plato.callbacks.handler import CallbackHandler
 from plato.callbacks.client import LogProgressCallback
 from plato.config import Config
 from plato.utils import s3
-from plato.clients import mpc
 
 # pylint: disable=unused-argument, protected-access
 class ClientEvents(socketio.AsyncClientNamespace):
     """A custom namespace for socketio.AsyncServer."""
 
-    def __init__(self, namespace, plato_client):
+    def __init__(self, namespace, mpc_client):
         super().__init__(namespace)
-        self.plato_client = plato_client
-        self.client_id = plato_client.client_id
+        self.mpc_client = mpc_client
+        self.client_id = mpc_client.client_id
 
     async def on_connect(self):
         """Upon a new connection to the server."""
-        logging.info("[Client #%d] Connected to the server.", self.client_id)
+        logging.info("[Client #%d] Connected to the relay server.", self.client_id)
 
     async def on_disconnect(self):
         """Upon a disconnection event."""
         logging.info(
-            "[Client #%d] The server disconnected the connection.", self.client_id
+            "[Client #%d] The relay server disconnected the connection.", self.client_id
         )
-        self.plato_client._clear_checkpoint_files()
+        self.mpc_client._clear_checkpoint_files()
         os._exit(0)
 
     async def on_connect_error(self, data):
         """Upon a failed connection attempt to the server."""
         logging.info(
-            "[Client #%d] A connection attempt to the server failed.", self.client_id
+            "[Client #%d] A connection attempt to the relay server failed.", self.client_id
         )
 
     async def on_payload_to_arrive(self, data):
-        """New payload is about to arrive from the server."""
-        await self.plato_client._payload_to_arrive(data["response"])
+        """New payload is about to arrive from the relay server."""
+        await self.mpc_client._payload_to_arrive(data["response"])
 
     async def on_request_update(self, data):
-        """The server is requesting an urgent model update."""
-        await self.plato_client._request_update(data)
+        """The relay server is requesting an urgent model update."""
+        await self.mpc_client._request_update(data)
 
     async def on_chunk(self, data):
-        """A chunk of data from the server arrived."""
-        await self.plato_client._chunk_arrived(data["data"])
+        """A chunk of data from the relay server arrived."""
+        await self.mpc_client._chunk_arrived(data["data"])
 
     async def on_payload(self, data):
-        """A portion of the new payload from the server arrived."""
-        await self.plato_client._payload_arrived(data["id"])
+        """A portion of the new payload from the relay server arrived."""
+        await self.mpc_client._payload_arrived(data["id"])
 
     async def on_payload_done(self, data):
-        """All of the new payload sent from the server arrived."""
+        """All of the new payload sent from the relay server arrived."""
         if "s3_key" in data:
-            await self.plato_client._payload_done(data["id"], s3_key=data["s3_key"])
+            await self.mpc_client._payload_done(data["id"], s3_key=data["s3_key"])
         else:
-            await self.plato_client._payload_done(data["id"])
+            await self.mpc_client._payload_done(data["id"])
 
 
 class Client:
@@ -80,21 +79,8 @@ class Client:
         self.chunks = []
         self.server_payload = None
         self.s3_client = None
-        self.outbound_processor = None
-        self.inbound_processor = None
         self.payload = None
         self.report = None
-
-        self.comm_simulation = (
-            Config().clients.comm_simulation
-            if hasattr(Config().clients, "comm_simulation")
-            else True
-        )
-
-        if hasattr(Config().algorithm, "cross_silo") and not Config().is_edge_server():
-            self.edge_server_id = None
-
-            assert hasattr(Config().algorithm, "total_silos")
 
         # Starting from the default client callback class, add all supplied server callbacks
         self.callbacks = [LogProgressCallback]
@@ -103,78 +89,30 @@ class Client:
         self.callback_handler = CallbackHandler(self.callbacks)
 
     def __repr__(self):
-        return f"Client #{self.client_id}"
+        return f"MPC Client #{self.client_id}"
 
     async def start_client(self) -> None:
         """Startup function for a client."""
 
-        if hasattr(Config().algorithm, "cross_silo") and not Config().is_edge_server():
-            launched_client_num = (
-                min(
-                    Config().trainer.max_concurrency
-                    * max(1, Config().gpu_count())
-                    * Config().algorithm.total_silos,
-                    Config().clients.per_round,
-                )
-                if hasattr(Config().trainer, "max_concurrency")
-                else Config().clients.per_round
-            )
-            # Contact one of the edge servers
-            self.edge_server_id = Config().clients.total_clients + math.ceil(
-                self.client_id / (launched_client_num / Config().algorithm.total_silos)
-            )
-
-            logging.info(
-                "[Client #%d] Contacting Edge Server #%d.",
-                self.client_id,
-                self.edge_server_id,
-            )
-        else:
-            await asyncio.sleep(5)
-            logging.info("[Client #%d] Contacting the server.", self.client_id)
+        await asyncio.sleep(5)
+        logging.info("[MPC Client #%d] Contacting the server.", self.client_id)
 
         self.sio = socketio.AsyncClient(reconnection=True)
-        self.sio.register_namespace(ClientEvents(namespace="/", plato_client=self))
+        self.sio.register_namespace(ClientEvents(namespace="/relay", mpc_client=self))
 
-        if hasattr(Config().server, "s3_endpoint_url"):
-            self.s3_client = s3.S3()
-
-        if hasattr(Config().server, "use_https"):
+        if hasattr(Config().relay_server, "use_https"):
             uri = f"https://{Config().server.address}"
         else:
             uri = f"http://{Config().server.address}"
 
         if hasattr(Config().server, "port"):
-            # If we are not using a production server deployed in the cloud
-            if (
-                hasattr(Config().algorithm, "cross_silo")
-                and not Config().is_edge_server()
-            ):
-                uri = f"{uri}:{int(Config().server.port) + int(self.edge_server_id)}"
-            else:
-                uri = f"{uri}:{Config().server.port}"
+            uri = f"{uri}:{Config().server.port}"
 
-        logging.info("[%s] Connecting to the server at %s.", self, uri)
+        logging.info("[%s] MPC client connecting to the relay server at %s.", self, uri)
         await self.sio.connect(uri, wait_timeout=600)
         await self.sio.emit("client_alive", {"id": self.client_id})
 
-        #connect to relay server for mpc
-        if (Config().relay_server is not None): #requires using a new class because of class-based namespaces
-            pass
-            # if hasattr(Config().relay_server, "use_https"):
-            #     relay_uri = f"https://{Config().relay_server.address}"
-            # else:
-            #     relay_uri = f"http://{Config().relay_server.address}"
-
-            # if hasattr(Config().relay_server, "port"):
-            #     relay_uri = f"{relay_uri}:{Config().relay_server.port}"
-
-            # logging.info("[%s] Connecting to the server at %s.", self, relay_uri)
-            # await self.sio.connect(relay_uri, wait_timeout=600, namespaces=['/relay'])
-            # await self.sio.emit("client_alive_for_relay_server", {"id": self.client_id}, namespaces=['/relay'])
-            # logging.info("[%s] connected to the server at %s.", self, relay_uri)
-
-        logging.info("[Client #%d] Waiting to be selected.", self.client_id)
+        logging.info("[MPC Client #%d] is connected.", self.client_id)
         await self.sio.wait()
 
     async def _payload_to_arrive(self, response) -> None:
@@ -182,63 +120,63 @@ class Client:
         self.current_round = response["current_round"]
 
         # Update (virtual) client id for client, trainer and algorithm
-        self.client_id = response["id"]
+        # self.client_id = response["id"]
 
-        self.process_server_response(response)
+        # self.process_server_response(response)
 
-        self.configure()
+        # self.configure()
 
-        logging.info("[Client #%d] Selected by the server.", self.client_id)
+        # logging.info("[Client #%d] Selected by the server.", self.client_id)
 
-        if not hasattr(Config().data, "reload_data") or Config().data.reload_data:
-            self._load_data()
+        # if not hasattr(Config().data, "reload_data") or Config().data.reload_data:
+        #     self._load_data()
 
-        if self.comm_simulation:
-            payload_filename = response["payload_filename"]
-            with open(payload_filename, "rb") as payload_file:
-                self.server_payload = pickle.load(payload_file)
+        # if self.comm_simulation:
+        #     payload_filename = response["payload_filename"]
+        #     with open(payload_filename, "rb") as payload_file:
+        #         self.server_payload = pickle.load(payload_file)
 
-            payload_size = sys.getsizeof(pickle.dumps(self.server_payload))
+        #     payload_size = sys.getsizeof(pickle.dumps(self.server_payload))
 
-            logging.info(
-                "[%s] Received %.2f MB of payload data from the server (simulated).",
-                self,
-                payload_size / 1024**2,
-            )
+        #     logging.info(
+        #         "[%s] Received %.2f MB of payload data from the server (simulated).",
+        #         self,
+        #         payload_size / 1024**2,
+        #     )
 
-            await self._handle_payload(self.server_payload)
+        #     await self._handle_payload(self.server_payload)
 
     async def _handle_payload(self, inbound_payload):
         """Handles the inbound payload upon receiving it from the server."""
-        self.inbound_received(self.inbound_processor)
-        self.callback_handler.call_event(
-            "on_inbound_received", self, self.inbound_processor
-        )
+        # self.inbound_received(self.inbound_processor)
+        # self.callback_handler.call_event(
+        #     "on_inbound_received", self, self.inbound_processor
+        # )
 
-        processed_inbound_payload = self.inbound_processor.process(inbound_payload)
+        # processed_inbound_payload = self.inbound_processor.process(inbound_payload)
 
-        # Inbound data is processed, computing outbound response
-        report, outbound_payload = await self.inbound_processed(
-            processed_inbound_payload
-        )
-        self.callback_handler.call_event(
-            "on_inbound_processed", self, processed_inbound_payload
-        )
+        # # Inbound data is processed, computing outbound response
+        # report, outbound_payload = await self.inbound_processed(
+        #     processed_inbound_payload
+        # )
+        # self.callback_handler.call_event(
+        #     "on_inbound_processed", self, processed_inbound_payload
+        # )
 
-        # Outbound data is ready to be processed
-        self.outbound_ready(report, self.outbound_processor)
-        self.callback_handler.call_event(
-            "on_outbound_ready", self, report, self.outbound_processor
-        )
-        processed_outbound_payload = self.outbound_processor.process(outbound_payload)
+        # # Outbound data is ready to be processed
+        # self.outbound_ready(report, self.outbound_processor)
+        # self.callback_handler.call_event(
+        #     "on_outbound_ready", self, report, self.outbound_processor
+        # )
+        # processed_outbound_payload = self.outbound_processor.process(outbound_payload)
 
-        # Sending the client report as metadata to the server (payload to follow)
-        await self.sio.emit(
-            "client_report", {"id": self.client_id, "report": pickle.dumps(report)}
-        )
+        # # Sending the client report as metadata to the server (payload to follow)
+        # await self.sio.emit(
+        #     "client_report", {"id": self.client_id, "report": pickle.dumps(report)}
+        # )
 
-        # Sending the client training payload to the server
-        await self._send(processed_outbound_payload)
+        # # Sending the client training payload to the server
+        # await self._send(processed_outbound_payload)
 
     def inbound_received(self, inbound_processor):
         """

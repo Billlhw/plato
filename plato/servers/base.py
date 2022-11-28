@@ -293,11 +293,11 @@ class Server:
 
         self.start()
 
-    def start(self, port=Config().server.port):
+    def start(self, port=Config().server.port, host=Config().server.address):
         """Start running the socket.io server."""
         logging.info(
             "Starting a server at address %s and port %s.",
-            Config().server.address,
+            host,
             port,
         )
 
@@ -314,7 +314,7 @@ class Server:
         app = web.Application()
         self.sio.attach(app)
         web.run_app(
-            app, host=Config().server.address, port=port, loop=asyncio.get_event_loop()
+            app, host=host, port=port, loop=asyncio.get_event_loop()
         )
 
     async def register_client(self, sid, client_id):
