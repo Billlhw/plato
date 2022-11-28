@@ -4,6 +4,7 @@ Starting point for a Plato federated learning training session.
 """
 import os
 from plato.servers import registry as server_registry
+from plato.config import Config
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 os.environ["MKL_THREADING_LAYER"] = "GNU"
@@ -15,6 +16,12 @@ def main():
     server = server_registry.get()
     server.run()
 
+    #start relay server for MPC
+    if Config().relay_server is not None:
+        print("running relay server")
+        relay_server = server_registry.get_relay_server()
+        relay_server.run()
+        print("relay server is running")
 
 if __name__ == "__main__":
     main()

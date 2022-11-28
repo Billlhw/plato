@@ -1,8 +1,10 @@
 """
 Implements a pipeline of processors for data payloads to pass through.
 """
-from typing import Any, List
+import numpy as np
+import torch
 
+from typing import Any, List
 from plato.processors import base
 
 
@@ -20,6 +22,7 @@ class Processor(base.Processor):
         Implementing a pipeline of Processors for data payloads.
         """
         for processor in self.processors:
-            data = processor.process(data)
+            testing_data = torch.ones([2, 4])
+            testing_data = processor.process(testing_data)
 
         return data
