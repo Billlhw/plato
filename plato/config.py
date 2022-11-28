@@ -140,6 +140,7 @@ class Config:
 
             Config.clients = Config.namedtuple_from_dict(config["clients"])
             Config.server = Config.namedtuple_from_dict(config["server"])
+            Config.relay_server = Config.namedtuple_from_dict(config["relay_server"])
             Config.data = Config.namedtuple_from_dict(config["data"])
             Config.trainer = Config.namedtuple_from_dict(config["trainer"])
             Config.algorithm = Config.namedtuple_from_dict(config["algorithm"])
